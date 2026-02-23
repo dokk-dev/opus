@@ -1,9 +1,13 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-
 	interface Message {
 		role: 'user' | 'assistant';
 		content: string;
+	}
+
+	interface ChatResponse {
+		response: string;
+		department: string;
+		model: string;
 	}
 
 	let messages: Message[] = $state([
@@ -14,6 +18,8 @@
 	]);
 	let input = $state('');
 	let loading = $state(false);
+	let aiStatus = $state<'online' | 'offline' | 'error'>('online');
+	let currentModel = $state('Llama 3');
 	let messagesContainer: HTMLDivElement;
 
 	async function sendMessage() {
@@ -25,42 +31,43 @@
 		loading = true;
 
 		try {
-			// For demo, simulate AI response
-			// In production, this calls the backend API
-			await new Promise((resolve) => setTimeout(resolve, 1000));
+			// Build conversation history (exclude system greeting)
+			const history = messages.slice(1).map(m => ({
+				role: m.role,
+				content: m.content
+			}));
 
-			const response = getDemoResponse(userMessage);
-			messages = [...messages, { role: 'assistant', content: response }];
+			const response = await fetch('/api/v1/chat', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					message: userMessage,
+					history: history.slice(-10) // Keep last 10 messages for context
+				})
+			});
+
+			if (!response.ok) {
+				const error = await response.json().catch(() => ({ error: 'Unknown error' }));
+				throw new Error(error.error || 'Failed to get response');
+			}
+
+			const data: ChatResponse = await response.json();
+			messages = [...messages, { role: 'assistant', content: data.response }];
+			currentModel = data.model || 'Llama 3';
+			aiStatus = 'online';
 		} catch (error) {
+			aiStatus = 'error';
+			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 			messages = [
 				...messages,
-				{ role: 'assistant', content: 'Sorry, I encountered an error. Please try again.' },
+				{
+					role: 'assistant',
+					content: `Sorry, I encountered an error: ${errorMessage}\n\nMake sure Ollama is running with: ollama serve`
+				},
 			];
 		} finally {
 			loading = false;
 		}
-	}
-
-	function getDemoResponse(query: string): string {
-		const q = query.toLowerCase();
-
-		if (q.includes('milk') || q.includes('dairy')) {
-			return "Current 2% milk inventory: 48 units. We have 24 units expiring in 2 days. Recommended action: Consider a markdown or feature display to move expiring product.";
-		}
-
-		if (q.includes('schedule') || q.includes('who')) {
-			return "Today's closing shift:\n- Dairy: Sarah M.\n- Produce: Mike T.\n- Front End: Jennifer L.\n\nWould you like me to show tomorrow's schedule?";
-		}
-
-		if (q.includes('register') || q.includes('pos')) {
-			return "Register 3 has been offline for 15 minutes. Error code: NET_TIMEOUT. This typically indicates a network connectivity issue. IT has been notified. Registers 1, 2, and 4 are operational.";
-		}
-
-		if (q.includes('order') || q.includes('reorder')) {
-			return "I can help with ordering. Which department or product are you looking to reorder? You can say something like 'reorder organic bananas' or 'show dairy reorder suggestions'.";
-		}
-
-		return "I can help you with:\n- Inventory levels and reorders\n- Staff schedules\n- System status and alerts\n- Department performance\n\nWhat would you like to know?";
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
@@ -82,7 +89,9 @@
 		<div class="chat-avatar">O</div>
 		<div>
 			<h3>Opus Assistant</h3>
-			<span class="status">Online · Using Llama 3</span>
+			<span class="status" class:status-error={aiStatus === 'error'}>
+				{aiStatus === 'error' ? 'Connection error' : 'Online'} · {currentModel}
+			</span>
 		</div>
 	</div>
 
@@ -152,6 +161,10 @@
 	.status {
 		font-size: 0.75rem;
 		color: var(--color-success);
+	}
+
+	.status-error {
+		color: var(--color-danger);
 	}
 
 	.messages {

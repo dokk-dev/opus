@@ -4,21 +4,24 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/dokk-dev/opus/internal/ai"
 	"github.com/dokk-dev/opus/internal/config"
 	"github.com/dokk-dev/opus/internal/gateway"
 )
 
 type Router struct {
-	mux     *http.ServeMux
-	config  *config.Config
-	gateway *gateway.Gateway
+	mux      *http.ServeMux
+	config   *config.Config
+	gateway  *gateway.Gateway
+	aiRouter *ai.Router
 }
 
-func NewRouter(cfg *config.Config, gw *gateway.Gateway) *Router {
+func NewRouter(cfg *config.Config, gw *gateway.Gateway, aiRouter *ai.Router) *Router {
 	r := &Router{
-		mux:     http.NewServeMux(),
-		config:  cfg,
-		gateway: gw,
+		mux:      http.NewServeMux(),
+		config:   cfg,
+		gateway:  gw,
+		aiRouter: aiRouter,
 	}
 
 	r.setupRoutes()
@@ -74,10 +77,46 @@ func (r *Router) getStatus(w http.ResponseWriter, req *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
+// ChatRequest represents an incoming chat message
+type ChatRequest struct {
+	Message string       `json:"message"`
+	History []ai.Message `json:"history,omitempty"`
+}
+
+// ChatResponse represents the AI response
+type ChatResponse struct {
+	Response   string `json:"response"`
+	Department string `json:"department"`
+	Model      string `json:"model"`
+}
+
 func (r *Router) handleChat(w http.ResponseWriter, req *http.Request) {
-	// TODO: Implement chat handler with AI
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"message": "Chat endpoint - coming soon"})
+
+	var chatReq ChatRequest
+	if err := json.NewDecoder(req.Body).Decode(&chatReq); err != nil {
+		http.Error(w, `{"error": "Invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if chatReq.Message == "" {
+		http.Error(w, `{"error": "Message is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Process through AI router
+	response, dept, err := r.aiRouter.ProcessQuery(req.Context(), chatReq.Message, chatReq.History)
+	if err != nil {
+		// Return error but don't expose internal details
+		http.Error(w, `{"error": "Failed to process message. Is Ollama running?"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	json.NewEncoder(w).Encode(ChatResponse{
+		Response:   response,
+		Department: string(dept),
+		Model:      r.config.OllamaModel,
+	})
 }
 
 func (r *Router) getDepartments(w http.ResponseWriter, req *http.Request) {

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dokk-dev/opus/internal/ai"
 	"github.com/dokk-dev/opus/internal/api"
 	"github.com/dokk-dev/opus/internal/config"
 	"github.com/dokk-dev/opus/internal/gateway"
@@ -20,11 +21,26 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	// Initialize Ollama client
+	ollamaClient := ai.NewOllamaClient(cfg.OllamaURL, cfg.OllamaModel)
+
+	// Check if Ollama is available
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if ollamaClient.IsAvailable(ctx) {
+		log.Printf("Connected to Ollama at %s (model: %s)", cfg.OllamaURL, cfg.OllamaModel)
+	} else {
+		log.Printf("Warning: Ollama not available at %s - AI features will fail", cfg.OllamaURL)
+	}
+	cancel()
+
+	// Initialize AI router with department agents
+	aiRouter := ai.NewRouter(ollamaClient)
+
 	// Initialize WebSocket gateway
 	gw := gateway.New(cfg)
 
 	// Initialize HTTP API
-	router := api.NewRouter(cfg, gw)
+	router := api.NewRouter(cfg, gw, aiRouter)
 
 	server := &http.Server{
 		Addr:         cfg.ServerAddr,
@@ -48,10 +64,10 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
